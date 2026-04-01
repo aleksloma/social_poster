@@ -232,6 +232,9 @@ def main():
 
     logger.info("Social Poster starting up")
 
+    # Restore DB from GCS if running in Cloud Run
+    db.sync_from_gcs()
+
     credentials = get_credentials()
     active_platforms = check_platform_credentials(credentials)
 
@@ -251,12 +254,14 @@ def main():
     if args.once or args.dry_run:
         logger.info("Running single cycle (once=%s, dry_run=%s)", args.once, args.dry_run)
         run_cycle(config, credentials, active_platforms, dry_run=args.dry_run)
+        db.sync_to_gcs()
         logger.info("Cycle complete, exiting")
     else:
         logger.info("Starting continuous loop (interval: %d hours)", check_interval)
         while True:
             try:
                 run_cycle(config, credentials, active_platforms, dry_run=False)
+                db.sync_to_gcs()
             except Exception as e:
                 logger.error("Cycle error (will retry next interval): %s", e, exc_info=True)
 

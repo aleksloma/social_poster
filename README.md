@@ -10,7 +10,7 @@ Automated social media posting service for [PowerDataChat](https://powerdatachat
 - **Cross-platform differentiation**: When the same blog post goes to multiple platforms, previously generated posts are fed as context so each platform gets a completely different angle
 - **Image support**: Automatically attaches blog featured images to social posts; logs whether each post included an image
 - **Configurable schedule**: Set posting days, times, and frequency per platform in `config.yaml`
-- **Idempotent**: SQLite database tracks posted content — no duplicate posts
+- **Idempotent**: SQLite database tracks posted content — no duplicate posts; DB persists to GCS between Cloud Run Job executions
 - **Graceful degradation**: Missing API keys skip that platform without errors
 - **Retry logic**: Network failures retry once before logging and continuing
 
@@ -114,12 +114,26 @@ chmod +x deploy_gcp.sh
 ```
 
 The deploy script:
-1. Builds a container image
-2. Creates secrets in Secret Manager (prefixed with `SOCIAL_POSTER_`)
-3. Deploys a Cloud Run Job named `social-poster`
-4. Sets up Cloud Scheduler to trigger it every 6 hours
+1. Authenticates with GCP and enables required APIs
+2. Builds a container image (`gcr.io/datachat-478206/social-poster`)
+3. Reads `.env` and creates secrets in Secret Manager (prefixed with `SOCIAL_POSTER_`)
+4. Creates a GCS bucket (`datachat-478206-social-poster-data`) for SQLite persistence between runs
+5. Deploys a Cloud Run Job named `social-poster`
+6. Sets up Cloud Scheduler (`social-poster-trigger`) to run every 6 hours
 
-**Important:** This is completely isolated from the main PowerDataChat (`datachat`) service. It uses separate secrets, a separate container image, and a separate Cloud Run Job.
+**Isolation:** This is completely isolated from the main PowerDataChat (`datachat`) service. Separate secrets (all prefixed `SOCIAL_POSTER_`), separate container image, separate Cloud Run Job, separate GCS bucket. The deploy script uses `gcloud run jobs` commands only — never `gcloud run services`.
+
+**State persistence:** The SQLite database is synced to/from GCS at startup and shutdown, so post history survives between Cloud Run Job executions.
+
+**Manual run:**
+```bash
+gcloud run jobs execute social-poster --region=us-central1
+```
+
+**View logs:**
+```bash
+gcloud logging read "resource.type=cloud_run_job AND resource.labels.job_name=social-poster" --limit=50
+```
 
 ## How It Works
 
