@@ -6,6 +6,7 @@ Prerequisites:
    (Auth tab -> Authorized redirect URLs)
 3. Request the following scopes/products:
    - Share on LinkedIn (w_member_social)
+   - Community Management API (w_organization_social) — for company page posting
    - Sign In with LinkedIn using OpenID Connect (openid, profile)
 
 Usage:
@@ -34,7 +35,7 @@ load_dotenv()
 CLIENT_ID = os.environ.get("LINKEDIN_CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("LINKEDIN_CLIENT_SECRET", "")
 REDIRECT_URI = "http://localhost:9999/callback"
-SCOPES = "openid profile w_member_social"
+SCOPES = "openid profile w_member_social w_organization_social"
 
 AUTH_URL = "https://www.linkedin.com/oauth/v2/authorization"
 TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken"

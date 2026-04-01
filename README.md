@@ -6,7 +6,8 @@ Automated social media posting service for [PowerDataChat](https://powerdatachat
 
 - **Multi-platform**: Posts to LinkedIn, Facebook, and X with platform-optimized content
 - **AI-generated content**: Uses Gemini 2.0 Flash with research-backed, platform-specific prompts tuned for optimal engagement (character counts, tone, structure)
-- **Two-pass quality check**: Every generated post is validated by a second Gemini call that checks length, accuracy, tone, and hook quality — correcting issues automatically
+- **Two-pass quality check**: Every generated post is validated by a second Gemini call that checks length, accuracy, tone, and hook quality — correcting issues automatically; preamble/commentary is stripped from corrected posts
+- **Pre-publish safety gate**: A deterministic (no LLM) final check catches validation leaks, missing URLs, markdown artifacts, LLM meta-talk, and platform-specific rule violations before any content reaches platform APIs
 - **Cross-platform differentiation**: When the same blog post goes to multiple platforms, previously generated posts are fed as context so each platform gets a completely different angle
 - **Image support**: Automatically attaches blog featured images to social posts; logs whether each post included an image
 - **Configurable schedule**: Set posting days, times, and frequency per platform in `config.yaml`
@@ -157,6 +158,13 @@ Prerequisites:
 - Create a LinkedIn App at [linkedin.com/developers](https://www.linkedin.com/developers/)
 - Add redirect URL: `http://localhost:9999/callback` (Auth tab -> Authorized redirect URLs)
 - Set `LINKEDIN_CLIENT_ID` and `LINKEDIN_CLIENT_SECRET` in `.env`
+
+### Posting as a Company Page
+
+To post as a company page instead of a personal profile:
+1. Request "Community Management API" in your LinkedIn app's Products tab
+2. Set `LINKEDIN_PERSON_URN=urn:li:organization:YOUR_ORG_ID` in `.env`
+3. Re-run `python auth_helpers/linkedin_oauth.py` to get a token with organization scope
 
 ### Facebook Page Token
 

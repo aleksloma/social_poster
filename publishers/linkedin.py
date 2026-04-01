@@ -1,4 +1,9 @@
-"""LinkedIn API publisher with image upload support."""
+"""LinkedIn API publisher with image upload support.
+
+Supports posting as both personal profiles (urn:li:person:xxx) and
+company pages (urn:li:organization:xxx) — the author/owner URN is
+passed from config, no hardcoded assumptions.
+"""
 
 import logging
 
@@ -19,12 +24,13 @@ def _headers(access_token: str, content_type: str = "application/json") -> dict:
     }
 
 
-def _upload_image(access_token: str, person_urn: str, image_data: bytes) -> str | None:
+def _upload_image(access_token: str, owner_urn: str, image_data: bytes) -> str | None:
     """Upload an image to LinkedIn and return the image URN.
 
-    Steps:
-    1. Initialize upload to get uploadUrl and image URN.
-    2. PUT the binary image data to uploadUrl.
+    Args:
+        access_token: OAuth token.
+        owner_urn: The URN that owns the image (person or organization).
+        image_data: Raw image bytes.
 
     Returns:
         The image URN string, or None on failure.
@@ -33,15 +39,18 @@ def _upload_image(access_token: str, person_urn: str, image_data: bytes) -> str 
     init_url = f"{BASE_URL}/images?action=initializeUpload"
     init_body = {
         "initializeUploadRequest": {
-            "owner": person_urn,
+            "owner": owner_urn,
         }
     }
 
+    logger.info("LinkedIn: initializing image upload (owner=%s)", owner_urn)
     try:
         resp = requests.post(init_url, json=init_body, headers=_headers(access_token), timeout=30)
         resp.raise_for_status()
     except requests.RequestException as e:
         logger.error("LinkedIn image upload init failed: %s", e)
+        if hasattr(e, "response") and e.response is not None:
+            logger.error("Response body: %s", e.response.text)
         return None
 
     data = resp.json().get("value", {})
@@ -49,8 +58,10 @@ def _upload_image(access_token: str, person_urn: str, image_data: bytes) -> str 
     image_urn = data.get("image")
 
     if not upload_url or not image_urn:
-        logger.error("LinkedIn image init response missing uploadUrl or image URN")
+        logger.error("LinkedIn image init response missing uploadUrl or image URN: %s", data)
         return None
+
+    logger.info("LinkedIn: image URN=%s, uploading %d bytes", image_urn, len(image_data))
 
     # Step 2: Upload the image binary
     try:
@@ -62,9 +73,11 @@ def _upload_image(access_token: str, person_urn: str, image_data: bytes) -> str 
         resp.raise_for_status()
     except requests.RequestException as e:
         logger.error("LinkedIn image binary upload failed: %s", e)
+        if hasattr(e, "response") and e.response is not None:
+            logger.error("Response body: %s", e.response.text)
         return None
 
-    logger.info("LinkedIn image uploaded: %s", image_urn)
+    logger.info("LinkedIn: image uploaded successfully: %s", image_urn)
     return image_urn
 
 
@@ -78,7 +91,8 @@ def publish(
 
     Args:
         access_token: LinkedIn OAuth access token.
-        person_urn: LinkedIn person URN (e.g., 'urn:li:person:xxxxx').
+        person_urn: Author URN — works for both urn:li:person:xxx and
+                    urn:li:organization:xxx.
         text: The post text/commentary.
         image_data: Optional image binary data.
 
@@ -111,6 +125,8 @@ def publish(
                 "id": image_urn,
             }
         }
+
+    logger.info("LinkedIn: posting (author=%s, with_image=%s)", person_urn, image_urn is not None)
 
     try:
         resp = requests.post(post_url, json=body, headers=_headers(access_token), timeout=30)

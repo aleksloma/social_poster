@@ -6,9 +6,14 @@ Uses a two-pass generation approach:
 
 When generating for multiple platforms from the same blog post, previously generated
 posts are included in the prompt context to ensure each platform gets a unique angle.
+
+A final deterministic pre-publish gate (check_post_before_publish) catches any
+remaining issues — validation preamble leaks, missing URLs, markdown artifacts,
+or LLM meta-talk — before content reaches platform APIs.
 """
 
 import logging
+import re
 
 import google.generativeai as genai
 
@@ -119,14 +124,77 @@ Check:
 5. HOOK: Does the opening line grab attention?
 6. UNIQUENESS: Does it bring a fresh angle (not just restating the blog title)?
 
-If ALL checks pass, respond with exactly: PASS
-If ANY check fails, respond with a corrected version of the post that fixes all issues. Write ONLY the corrected post, nothing else."""
+RESPOND WITH EXACTLY ONE OF:
+- The single word PASS (if all checks pass)
+- The corrected post text and NOTHING ELSE (if any check fails)
+
+CRITICAL: Do NOT include any explanation, commentary, analysis, or preamble. Do NOT say things like "here is the corrected version" or describe what you changed or what was wrong. Output ONLY the raw post text that should be published as-is, starting with the first word of the actual post."""
 
 PROMPTS = {
     "linkedin": LINKEDIN_PROMPT,
     "facebook": FACEBOOK_PROMPT,
     "x": X_PROMPT,
 }
+
+# Phrases that indicate validation preamble leaked into the output
+_PREAMBLE_MARKERS = [
+    "here is the corrected version",
+    "here's the corrected",
+    "corrected version:",
+    "corrected post:",
+    "here is the revised",
+    "here's the revised",
+    "revised version:",
+]
+
+# Lines containing these phrases are stripped as validation commentary
+_COMMENTARY_PHRASES = [
+    "characters, which exceeds",
+    "checks passed",
+    "check failed",
+    "the original post is",
+    "all other checks",
+    "corrected version",
+    "within the required range",
+    "exceeds the",
+    "character limit",
+]
+
+# If these appear in the final output, it's definitely contaminated
+_CONTAMINATION_PHRASES = [
+    "the original post is",
+    "characters, which exceeds",
+    "all other checks passed",
+    "checks passed",
+    "check failed",
+    "respond with exactly",
+    "write only",
+    "nothing else",
+]
+
+# Pre-publish: validation leak phrases
+_VALIDATION_LEAK_PHRASES = [
+    "the original post",
+    "characters, which exceeds",
+    "checks passed",
+    "check failed",
+    "corrected version",
+    "here is the corrected",
+    "all other checks",
+    "within the required range",
+    "respond with exactly",
+    "write only",
+    "nothing else",
+]
+
+# Pre-publish: LLM meta-talk phrases
+_LLM_META_PHRASES = [
+    "as an ai",
+    "i'm an ai",
+    "as a language model",
+    "i cannot",
+    "i don't have access",
+]
 
 
 def configure_gemini(api_key: str) -> None:
@@ -136,10 +204,7 @@ def configure_gemini(api_key: str) -> None:
 
 
 def _build_other_platforms_context(other_posts: dict[str, str]) -> str:
-    """Build a prompt fragment listing posts already generated for other platforms.
-
-    This ensures each platform gets a completely different angle.
-    """
+    """Build a prompt fragment listing posts already generated for other platforms."""
     if not other_posts:
         return ""
 
@@ -154,6 +219,60 @@ def _build_other_platforms_context(other_posts: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _clean_validation_response(response_text: str, original_post: str) -> str:
+    """Clean preamble/commentary from a validation response.
+
+    Gemini sometimes returns explanatory text before the corrected post.
+    This function strips that preamble and returns only the actual post text.
+    """
+    text = response_text.strip()
+
+    # Check for PASS (case-insensitive, with trailing punctuation/whitespace)
+    if re.match(r"^pass[\s.!]*$", text, re.IGNORECASE):
+        return original_post
+
+    # Look for preamble markers and take everything after that line
+    lower_text = text.lower()
+    for marker in _PREAMBLE_MARKERS:
+        idx = lower_text.find(marker)
+        if idx != -1:
+            # Find end of the line containing the marker
+            newline_idx = text.find("\n", idx)
+            if newline_idx != -1:
+                text = text[newline_idx:].strip()
+                break
+
+    # If no marker found, look for a double blank line separator
+    if lower_text == text.strip().lower():  # No marker was found
+        parts = re.split(r"\n\s*\n\s*\n", text, maxsplit=1)
+        if len(parts) == 2 and len(parts[1].strip()) > 50:
+            text = parts[1].strip()
+
+    # Strip lines that look like validation commentary
+    lines = text.split("\n")
+    cleaned_lines = []
+    for line in lines:
+        line_lower = line.lower().strip()
+        is_commentary = any(phrase in line_lower for phrase in _COMMENTARY_PHRASES)
+        if not is_commentary:
+            cleaned_lines.append(line)
+    text = "\n".join(cleaned_lines).strip()
+
+    # Safety check: if result is too short, fall back to original
+    if len(text) < 50:
+        logger.warning("Validation cleanup produced text too short (%d chars), using original", len(text))
+        return original_post
+
+    # Final contamination check
+    text_lower = text.lower()
+    for phrase in _CONTAMINATION_PHRASES:
+        if phrase in text_lower:
+            logger.warning("Validation cleanup still contains '%s', using original post", phrase)
+            return original_post
+
+    return text
+
+
 def _validate_post(
     platform: str,
     generated_post: str,
@@ -161,7 +280,7 @@ def _validate_post(
 ) -> str:
     """Run a quality-check pass on the generated post.
 
-    Returns the original post if it passes validation, or the corrected version.
+    Returns the original post if it passes validation, or the cleaned corrected version.
     """
     prompt = VALIDATION_PROMPT.format(
         platform=platform,
@@ -173,18 +292,74 @@ def _validate_post(
         response = model.generate_content(prompt)
         result = response.text.strip()
 
-        if result == "PASS":
-            logger.info("Validation PASSED for %s post", platform)
-            return generated_post
+        # Use the robust cleanup function
+        cleaned = _clean_validation_response(result, generated_post)
 
-        logger.info(
-            "Validation returned corrected %s post (original: %d chars, corrected: %d chars)",
-            platform, len(generated_post), len(result),
-        )
-        return result
+        if cleaned == generated_post:
+            logger.info("Validation PASSED for %s post", platform)
+        else:
+            logger.info(
+                "Validation returned corrected %s post (original: %d chars, corrected: %d chars)",
+                platform, len(generated_post), len(cleaned),
+            )
+        return cleaned
     except Exception as e:
         logger.warning("Validation call failed for %s, using original post: %s", platform, e)
         return generated_post
+
+
+def check_post_before_publish(platform: str, text: str, blog_url: str) -> tuple[bool, str]:
+    """Final deterministic pre-publish quality gate. No LLM involved.
+
+    Returns (is_ok, reason). If is_ok is False, the post should be regenerated.
+    """
+    if not text or len(text) < 30:
+        return False, "Post is empty or too short (under 30 chars)"
+
+    text_lower = text.lower()
+
+    # Validation leak check
+    for phrase in _VALIDATION_LEAK_PHRASES:
+        if phrase in text_lower:
+            return False, f"Validation leak detected: '{phrase}'"
+
+    # LLM meta-talk check
+    for phrase in _LLM_META_PHRASES:
+        if phrase in text_lower:
+            return False, f"LLM meta-talk detected: '{phrase}'"
+
+    # Blog URL present
+    if blog_url and blog_url not in text:
+        return False, f"Missing blog URL: {blog_url}"
+
+    # No markdown formatting leak
+    for marker in ["**", "##", "```", "---"]:
+        if marker in text:
+            return False, f"Markdown formatting detected: '{marker}'"
+
+    # Mentions PowerDataChat
+    if "powerdatachat" not in text_lower and "powerdatachat.com" not in text_lower:
+        return False, "Missing PowerDataChat mention"
+
+    # Platform-specific rules
+    if platform == "linkedin":
+        if not (500 <= len(text) <= 2000):
+            return False, f"LinkedIn post length {len(text)} outside 500-2000 range"
+        if "#" not in text:
+            return False, "LinkedIn post missing hashtag"
+
+    elif platform == "facebook":
+        if not (30 <= len(text) <= 800):
+            return False, f"Facebook post length {len(text)} outside 30-800 range"
+        hashtag_count = text.count("#")
+        if hashtag_count > 2:
+            return False, f"Facebook post has {hashtag_count} hashtags (max 2)"
+
+    elif platform == "x":
+        if len(text) > 280:
+            return False, f"Tweet length {len(text)} exceeds 280 chars"
+
+    return True, "OK"
 
 
 def generate_post(
@@ -201,6 +376,7 @@ def generate_post(
 
     Uses a two-pass approach: generate then validate. When other_posts is
     provided, includes them in the prompt to ensure a different angle.
+    Appends blog_url if the generated text is missing it.
 
     Args:
         platform: One of 'linkedin', 'facebook', 'x'.
@@ -249,5 +425,10 @@ def generate_post(
     final_text = _validate_post(platform, text, model_name)
     if final_text != text:
         logger.debug("Corrected %s post:\n%s", platform, final_text)
+
+    # Ensure blog URL is present
+    if blog_url and blog_url not in final_text:
+        final_text = final_text.rstrip() + "\n\n" + blog_url
+        logger.info("Appended missing blog URL to %s post", platform)
 
     return final_text

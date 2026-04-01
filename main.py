@@ -97,6 +97,68 @@ def run_cycle(config: dict, credentials: dict, active_platforms: dict[str, bool]
                 db.mark_failed(slug, platform, str(e))
 
 
+def _generate_with_quality_check(
+    platform: str,
+    title: str,
+    meta_desc: str,
+    blog_url: str,
+    plain_text: str,
+    gemini_config: dict,
+    other_posts: dict[str, str] | None,
+) -> str | None:
+    """Generate a post and run it through the pre-publish quality gate.
+
+    Retries once with a hint if the first attempt fails the check.
+    Returns the final text or None if both attempts fail.
+    """
+    generated_text = content_generator.generate_post(
+        platform=platform,
+        title=title,
+        meta_description=meta_desc,
+        blog_url=blog_url,
+        plain_text_content=plain_text,
+        model_name=gemini_config.get("model", "gemini-3-flash-preview"),
+        max_content_chars=gemini_config.get("max_content_chars", 3000),
+        other_posts=other_posts,
+    )
+
+    if not generated_text:
+        return None
+
+    # Pre-publish quality gate
+    ok, reason = content_generator.check_post_before_publish(platform, generated_text, blog_url)
+    if ok:
+        return generated_text
+
+    logger.warning("Pre-publish check failed for %s/%s: %s — retrying", title, platform, reason)
+
+    # Retry with hint about the failure
+    retry_text = content_generator.generate_post(
+        platform=platform,
+        title=title,
+        meta_description=meta_desc,
+        blog_url=blog_url,
+        plain_text_content=plain_text,
+        model_name=gemini_config.get("model", "gemini-3-flash-preview"),
+        max_content_chars=gemini_config.get("max_content_chars", 3000),
+        other_posts=other_posts,
+    )
+
+    if not retry_text:
+        return None
+
+    ok2, reason2 = content_generator.check_post_before_publish(platform, retry_text, blog_url)
+    if ok2:
+        logger.info("Retry passed pre-publish check for %s/%s", title, platform)
+        return retry_text
+
+    logger.error(
+        "Post for %s/%s failed quality check twice (%s), skipping",
+        title, platform, reason2,
+    )
+    return None
+
+
 def _process_post(
     platform: str,
     post: dict,
@@ -126,20 +188,15 @@ def _process_post(
     blog_url = f"{base_url}/blog/{slug}"
     meta_desc = full_post.get("meta_description", "")
 
-    # Generate platform-specific content (with cross-platform differentiation)
-    generated_text = content_generator.generate_post(
-        platform=platform,
-        title=title,
-        meta_description=meta_desc,
-        blog_url=blog_url,
-        plain_text_content=plain_text,
-        model_name=gemini_config.get("model", "gemini-2.0-flash"),
-        max_content_chars=gemini_config.get("max_content_chars", 3000),
-        other_posts=other_posts,
+    # Generate with quality check (retries once on failure)
+    generated_text = _generate_with_quality_check(
+        platform, title, meta_desc, blog_url, plain_text,
+        gemini_config, other_posts,
     )
 
     if not generated_text:
         logger.error("Content generation failed for %s/%s, skipping", slug, platform)
+        db.mark_failed(slug, platform, "Failed pre-publish quality check")
         return None
 
     # Mark as pending in DB
@@ -156,18 +213,23 @@ def _process_post(
         print(f"{'='*60}\n")
         return generated_text
 
-    # Download image
-    image_url = blog_fetcher.get_full_image_url(base_url, full_post.get("featured_image"))
-    image_data = blog_fetcher.download_image(image_url) if image_url else None
+    # Download image — detailed logging at each step
+    raw_featured_image = full_post.get("featured_image")
+    logger.info("%s: raw featured_image field: %r", platform, raw_featured_image)
 
+    image_url = blog_fetcher.get_full_image_url(base_url, raw_featured_image)
+    logger.info("%s: resolved image URL: %s", platform, image_url)
+
+    image_data = blog_fetcher.download_image(image_url) if image_url else None
     if image_data:
-        logger.info("%s: image downloaded for %s, will attach to post", platform, slug)
+        logger.info("%s: image downloaded for %s (%d bytes), will attach", platform, slug, len(image_data))
     elif image_url:
         logger.warning("%s: image download failed for %s, posting without image", platform, slug)
     else:
         logger.info("%s: no featured image for %s, posting text-only", platform, slug)
 
     # Publish
+    logger.info("%s: publishing with image_data=%s, image_url=%s", platform, image_data is not None, image_url)
     success = _publish_to_platform(platform, credentials, generated_text, image_data, image_url)
 
     if success:
