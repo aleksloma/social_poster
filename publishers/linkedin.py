@@ -6,7 +6,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-API_VERSION = "202401"
+API_VERSION = "202504"
 BASE_URL = "https://api.linkedin.com/rest"
 
 

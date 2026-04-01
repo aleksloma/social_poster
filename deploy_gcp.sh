@@ -13,7 +13,7 @@ set -euo pipefail
 PROJECT_ID="datachat-478206"
 REGION="us-central1"
 JOB_NAME="social-poster"
-IMAGE="gcr.io/${PROJECT_ID}/social-poster"
+IMAGE="us-central1-docker.pkg.dev/${PROJECT_ID}/social-poster/social-poster:latest"
 SCHEDULER_NAME="social-poster-trigger"
 GCS_BUCKET="${PROJECT_ID}-social-poster-data"
 
