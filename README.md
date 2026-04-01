@@ -141,7 +141,7 @@ python auth_helpers/linkedin_oauth.py
 
 Prerequisites:
 - Create a LinkedIn App at [linkedin.com/developers](https://www.linkedin.com/developers/)
-- Add redirect URL: `http://localhost:8000/callback`
+- Add redirect URL: `http://localhost:9999/callback` (Auth tab -> Authorized redirect URLs)
 - Set `LINKEDIN_CLIENT_ID` and `LINKEDIN_CLIENT_SECRET` in `.env`
 
 ### Facebook Page Token

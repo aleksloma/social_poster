@@ -21,7 +21,7 @@ schedule:
     post_hour_utc: 15
 
 gemini:
-  model: "gemini-2.0-flash"
+  model: "gemini-2.5-flash"
   max_content_chars: 3000   # truncate blog plain text sent to Gemini
 
 logging:
