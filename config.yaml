@@ -1,0 +1,29 @@
+blog:
+  api_url: "https://powerdatachat.com/api/blog/posts"
+  base_url: "https://powerdatachat.com"
+
+schedule:
+  check_interval_hours: 6
+
+  linkedin:
+    posts_per_week: 2
+    days: [1, 3]           # 0=Monday ... 6=Sunday. So 1=Tuesday, 3=Thursday
+    post_hour_utc: 14
+
+  facebook:
+    posts_per_week: 3
+    days: [0, 2, 4]        # Monday, Wednesday, Friday
+    post_hour_utc: 16
+
+  x:
+    posts_per_week: 2
+    days: [1, 4]           # Tuesday, Friday
+    post_hour_utc: 15
+
+gemini:
+  model: "gemini-2.0-flash"
+  max_content_chars: 3000   # truncate blog plain text sent to Gemini
+
+logging:
+  level: INFO
+  file: social_poster.log

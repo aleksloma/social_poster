@@ -1,0 +1,8 @@
+.env
+*.db
+__pycache__/
+*.pyc
+social_poster.log
+.pytest_cache/
+venv/
+*.egg-info/
