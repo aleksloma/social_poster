@@ -5,8 +5,10 @@ Automated social media posting service for [PowerDataChat](https://powerdatachat
 ## Features
 
 - **Multi-platform**: Posts to LinkedIn, Facebook, and X with platform-optimized content
-- **AI-generated content**: Uses Gemini 2.0 Flash to create unique posts per platform
-- **Image support**: Automatically attaches blog featured images to social posts
+- **AI-generated content**: Uses Gemini 2.0 Flash with research-backed, platform-specific prompts tuned for optimal engagement (character counts, tone, structure)
+- **Two-pass quality check**: Every generated post is validated by a second Gemini call that checks length, accuracy, tone, and hook quality — correcting issues automatically
+- **Cross-platform differentiation**: When the same blog post goes to multiple platforms, previously generated posts are fed as context so each platform gets a completely different angle
+- **Image support**: Automatically attaches blog featured images to social posts; logs whether each post included an image
 - **Configurable schedule**: Set posting days, times, and frequency per platform in `config.yaml`
 - **Idempotent**: SQLite database tracks posted content — no duplicate posts
 - **Graceful degradation**: Missing API keys skip that platform without errors
@@ -123,9 +125,11 @@ The deploy script:
 
 1. **Fetch**: Pulls the latest blog posts from `powerdatachat.com/api/blog/posts`
 2. **Schedule**: Distributes posts round-robin across platforms based on weekly quotas
-3. **Generate**: Sends blog content to Gemini with platform-specific prompts
-4. **Publish**: Posts to each platform's API with the featured image attached
-5. **Track**: Records everything in SQLite to prevent duplicates
+3. **Generate**: Sends blog content to Gemini with platform-specific prompts optimized for each platform's engagement data (LinkedIn: 1,300-1,600 chars, Facebook: under 100 words, X: under 200 chars)
+4. **Validate**: Each generated post goes through a second Gemini call that checks length, accuracy, tone, hook quality, and uniqueness — auto-correcting if needed
+5. **Differentiate**: When the same blog goes to multiple platforms, each generation includes the other platforms' posts as context to ensure different angles
+6. **Publish**: Posts to each platform's API with the featured image attached
+7. **Track**: Records everything in SQLite to prevent duplicates
 
 ## Auth Helper Scripts
 

@@ -85,7 +85,7 @@ def publish(
         resp.raise_for_status()
         tweet_data = resp.json()
         tweet_id = tweet_data.get("data", {}).get("id")
-        logger.info("Tweet published: %s", tweet_id)
+        logger.info("Tweet published: %s (with_image=%s)", tweet_id, media_id is not None)
         return True
     except Exception as e:
         logger.error("Twitter publish failed: %s", e)

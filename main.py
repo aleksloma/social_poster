@@ -63,12 +63,19 @@ def run_cycle(config: dict, credentials: dict, active_platforms: dict[str, bool]
         logger.error("Gemini API key not configured — cannot generate content")
         return
 
+    # Build a slug → {platform: post} map so we can generate cross-platform
+    # differentiated content (each platform gets the others' text as context).
+    slug_platforms: dict[str, list[tuple[str, dict]]] = {}
     for platform, assigned_posts in assignments.items():
-        platform_config = schedule_config.get(platform, {})
-
         for post in assigned_posts:
-            slug = post["slug"]
+            slug_platforms.setdefault(post["slug"], []).append((platform, post))
+
+    for slug, platform_posts in slug_platforms.items():
+        generated_so_far: dict[str, str] = {}  # platform → generated text
+
+        for platform, post in platform_posts:
             title = post.get("title", slug)
+            platform_config = schedule_config.get(platform, {})
 
             # Check if today is a posting day for this platform
             if not dry_run and not scheduler.should_post_now(platform_config):
@@ -79,10 +86,12 @@ def run_cycle(config: dict, credentials: dict, active_platforms: dict[str, bool]
                 )
 
             try:
-                _process_post(
+                generated_text = _process_post(
                     platform, post, config, credentials, gemini_config,
-                    blog_config, dry_run,
+                    blog_config, dry_run, other_posts=generated_so_far,
                 )
+                if generated_text:
+                    generated_so_far[platform] = generated_text
             except Exception as e:
                 logger.error("Error processing %s for %s: %s", slug, platform, e, exc_info=True)
                 db.mark_failed(slug, platform, str(e))
@@ -96,8 +105,12 @@ def _process_post(
     gemini_config: dict,
     blog_config: dict,
     dry_run: bool,
-) -> None:
-    """Process a single post for a single platform: fetch → generate → publish."""
+    other_posts: dict[str, str] | None = None,
+) -> str | None:
+    """Process a single post for a single platform: fetch → generate → publish.
+
+    Returns the generated text (for cross-platform differentiation) or None.
+    """
     slug = post["slug"]
     title = post.get("title", slug)
     base_url = blog_config["base_url"]
@@ -106,14 +119,14 @@ def _process_post(
     full_post = blog_fetcher.fetch_full_post(blog_config["api_url"], slug)
     if not full_post:
         logger.error("Could not fetch full post for %s, skipping", slug)
-        return
+        return None
 
     # Prepare data for content generation
     plain_text = blog_fetcher.html_to_plain_text(full_post.get("html_content", ""))
     blog_url = f"{base_url}/blog/{slug}"
     meta_desc = full_post.get("meta_description", "")
 
-    # Generate platform-specific content
+    # Generate platform-specific content (with cross-platform differentiation)
     generated_text = content_generator.generate_post(
         platform=platform,
         title=title,
@@ -122,11 +135,12 @@ def _process_post(
         plain_text_content=plain_text,
         model_name=gemini_config.get("model", "gemini-2.0-flash"),
         max_content_chars=gemini_config.get("max_content_chars", 3000),
+        other_posts=other_posts,
     )
 
     if not generated_text:
         logger.error("Content generation failed for %s/%s, skipping", slug, platform)
-        return
+        return None
 
     # Mark as pending in DB
     db.mark_pending(slug, platform, generated_text, "now")
@@ -140,11 +154,18 @@ def _process_post(
         print(f"{'='*60}")
         print(generated_text)
         print(f"{'='*60}\n")
-        return
+        return generated_text
 
     # Download image
     image_url = blog_fetcher.get_full_image_url(base_url, full_post.get("featured_image"))
     image_data = blog_fetcher.download_image(image_url) if image_url else None
+
+    if image_data:
+        logger.info("%s: image downloaded for %s, will attach to post", platform, slug)
+    elif image_url:
+        logger.warning("%s: image download failed for %s, posting without image", platform, slug)
+    else:
+        logger.info("%s: no featured image for %s, posting text-only", platform, slug)
 
     # Publish
     success = _publish_to_platform(platform, credentials, generated_text, image_data, image_url)
@@ -153,6 +174,8 @@ def _process_post(
         db.mark_published(slug, platform)
     else:
         db.mark_failed(slug, platform, "Publishing failed")
+
+    return generated_text
 
 
 def _publish_to_platform(

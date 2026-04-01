@@ -50,7 +50,7 @@ def publish(
         resp.raise_for_status()
         data = resp.json()
         post_id = data.get("id") or data.get("post_id")
-        logger.info("Facebook post published: %s", post_id)
+        logger.info("Facebook post published: %s (with_image=%s)", post_id, image_url is not None)
         return True
     except requests.RequestException as e:
         logger.error("Facebook publish failed: %s", e)

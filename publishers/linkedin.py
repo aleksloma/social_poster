@@ -115,7 +115,7 @@ def publish(
     try:
         resp = requests.post(post_url, json=body, headers=_headers(access_token), timeout=30)
         resp.raise_for_status()
-        logger.info("LinkedIn post published successfully")
+        logger.info("LinkedIn post published successfully (with_image=%s)", image_urn is not None)
         return True
     except requests.RequestException as e:
         logger.error("LinkedIn publish failed: %s", e)
